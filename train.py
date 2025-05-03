@@ -70,3 +70,9 @@ def get_dataset(config):
 def get_model(config, vocab_src_len, vocab_tgt_len):
     model = build_transformer(vocab_src_len, vocab_tgt_len, config["seq_len"], config["seq_len"], config["d_model"])
     return model
+
+def train_model(config):
+    # device (cuda, cpu)
+    device = torch.device("cuda" if torch.cuda.is_available else "cpu")
+    print(f"Using device {device}")
+    Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
