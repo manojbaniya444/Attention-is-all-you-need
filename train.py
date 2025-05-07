@@ -19,6 +19,78 @@ from model import build_transformer
 
 from tqdm import tqdm
 
+# Greedy decoding
+def greedy_decoding(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_len, device):
+    # start of sentence and end of sentence token id here
+    sos_idx = tokenizer_tgt.token_to_id("[SOS]")
+    eos_idx = tokenizer_tgt.token_to_id("[EOS]")
+
+    # precompute the encoder output and reuse it for every token we get from the decoder
+    encoder_output = model.encode(source, source_mask)
+    
+    # Initialize the initial input for inference with the SOS Token (Auto Regressive Type)
+    decoder_input = torch.empty(1, 1).fill(sos_idx).type_as(source).to(device)
+
+    while True:
+        if decoder_input.size(1) == max_len:
+            break
+        
+        # building mask for the target (decoder input)
+        decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
+
+        # calculate the output from the projection layer
+        out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+
+        prob = model.project(out[:, -1])
+        _, next_word = torch.max(prob, dim=1)
+        
+        decoder_input = torch.cat([decoder_input, torch.empty(1, 1).type_as(source).fill_(next_word.item()).to(device)], dim=1)
+
+        if next_word == eos_idx:
+            break
+        
+    return decoder_input.squeeze(0)
+
+        
+
+# validation
+def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, global_state, num_examples):
+    # put the model in eval mode
+    model.eval()
+    
+    count = 0
+    source_texts = []
+    expected = []
+    predicted_output = []
+    
+    # size of the control window (just use a default value)
+    console_width = 80
+    
+    with torch.no_grad():
+        for batch in validation_ds:
+            count += 1
+            encoder_input = batch["encoder_input"].to(device)
+            encoder_mask = batch["encoder_mask"].to(device)
+            
+            assert encoder_input.size(0) == 1, "Batch size must be 1 for validation"
+            
+            model_output = greedy_decoding(model, encoder_input, encoder_mask, tokenizer_src, tokenizer_tgt, max_len, device)
+            
+            source_text = batch["src_text"][0]
+            target_text = batch["tgt_text"][0]
+            model_out_text = tokenizer_tgt.decode(model_output.detach().cpu().numpy())
+            
+            source_texts.append(source_text)
+            expected.append(target_text)
+            predicted_output.append(model_out_text)
+            
+            # Printing the console
+            
+            
+            if count == num_examples:
+                break
+            
+
 # get all sentences
 def get_all_sentences(dataset, lang):
     for item in dataset:
@@ -133,9 +205,11 @@ def train_model(config):
             optimizer.step()
             optimizer.zero_grad()
             
+            
             # increase the global step by 1
             global_step = global_step + 1
             
+        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config["seq_len"], device, global_step, 10)
             
     # saving the model
     model_filename = get_weights_file_path(config, f"{epoch:02d}")
